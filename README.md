@@ -1,5 +1,6 @@
 # uevr-joytokey
-Controller to keypress mapper for UEVR
+Controller to keypress mapper for UEVR. Maps mouse pointer, mouse buttons, and keyboard presses for games that are mouse and keyboard only to the controllers.
+
 See sample config file joytokey.txt included with the dll.
 These go in the game's plugin folder together. Edit the joytokey.txt for your game.
 
