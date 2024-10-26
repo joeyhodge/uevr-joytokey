@@ -15,6 +15,39 @@
 #include "uevr/Plugin.hpp"
 #include "main.h"
 
+DWORD WINAPI TimerCallbackThreadProc(LPVOID lpParameter);
+/*
+OpenXR Action Paths 
+    static const inline std::string s_action_pose = "/actions/default/in/Pose";
+    static const inline std::string s_action_grip_pose = "/actions/default/in/GripPose";
+    static const inline std::string s_action_trigger = "/actions/default/in/Trigger";
+    static const inline std::string s_action_grip = "/actions/default/in/Grip";
+    static const inline std::string s_action_joystick = "/actions/default/in/Joystick";
+    static const inline std::string s_action_joystick_click = "/actions/default/in/JoystickClick";
+
+    static const inline std::string s_action_a_button_left = "/actions/default/in/AButtonLeft";
+    static const inline std::string s_action_b_button_left = "/actions/default/in/BButtonLeft";
+    static const inline std::string s_action_a_button_touch_left = "/actions/default/in/AButtonTouchLeft";
+    static const inline std::string s_action_b_button_touch_left = "/actions/default/in/BButtonTouchLeft";
+
+    static const inline std::string s_action_a_button_right = "/actions/default/in/AButtonRight";
+    static const inline std::string s_action_b_button_right = "/actions/default/in/BButtonRight";
+    static const inline std::string s_action_a_button_touch_right = "/actions/default/in/AButtonTouchRight";
+    static const inline std::string s_action_b_button_touch_right = "/actions/default/in/BButtonTouchRight";
+
+    static const inline std::string s_action_dpad_up = "/actions/default/in/DPad_Up";
+    static const inline std::string s_action_dpad_right = "/actions/default/in/DPad_Right";
+    static const inline std::string s_action_dpad_down = "/actions/default/in/DPad_Down";
+    static const inline std::string s_action_dpad_left = "/actions/default/in/DPad_Left";
+    static const inline std::string s_action_system_button = "/actions/default/in/SystemButton";
+    static const inline std::string s_action_thumbrest_touch_left = "/actions/default/in/ThumbrestTouchLeft";
+    static const inline std::string s_action_thumbrest_touch_right = "/actions/default/in/ThumbrestTouchRight";
+
+*/
+
+
+#define CONTROLLER_SOURCE_THREAD    0xFFFFFFFF
+#define XINPUT_POLL_TIME 			17
 
 void DebugPrint(char* Format, ...);
 using namespace uevr;
@@ -26,23 +59,31 @@ using namespace uevr;
         API::get()->log_info(__VA_ARGS__); \
     }
     
+	
 class JoyToKey : public uevr::Plugin {
 public:
     KEY_ITEM m_Keys[TOTAL_BUTTONS];
     std::string m_Path;
-
-    JoyToKey() = default;
-	
     const UEVR_PluginInitializeParam* m_Param;
     const UEVR_VRData* m_VR;
+	bool m_XinputPumpRunning;
+
+    JoyToKey() = default;
 	
     void on_dllmain(HANDLE handle) override {
          StoreConfigFileLocation(handle);
    }
 
     void on_initialize() override {
+      DWORD ThreadId  = 0;
       API::get()->log_info("JoytoKey.dll: Config file should be: %s\n", m_Path.c_str());  
       ReadConfig(m_Path);
+
+      m_Param = API::get()->param();
+      m_VR = m_Param->vr;
+
+	  m_XinputPumpRunning = false;
+	  CreateThread(NULL, 0,(LPTHREAD_START_ROUTINE)(&TimerCallbackThreadProc), this, 0 , &ThreadId);
     }
 
     void send_key_or_mouse(int Index, bool key_up) {
@@ -61,8 +102,8 @@ public:
 		int Value = StickValue;
 		
         // Clamp Value to the range -20000 to +20000
-        if (Value < -20000) Value = -20000;
-        if (Value > 20000) Value = 20000;
+        if (Value < -32000) Value = -32000;
+        if (Value > 32000) Value = 32000;
         
         // Flip the axis. The joystick is inverted to the mouse + vs -
         if (Horizontal == false) Value = Value * -1;
@@ -72,11 +113,11 @@ public:
         if (Value < 0 && Value > -3000) return;
         
         if (Value < 5000 && Value > -5000) Value = Value / 2;
-        if (Value > 15000 || Value < -15000) Value = (int)((Value * 3)/2);
+        if (Value > 28000 || Value < -28000) Value = (int)((Value * 3)/2);
 
         if(Horizontal == false) Value = (Value / 3) * 2;
         // Scale Value to the range -10 to +10
-        float scaledValue = (static_cast<float>(Value) / 2000.0f);
+        float scaledValue = (static_cast<float>(Value) / 3200.0f);
 
         // Calculate new position based on Horizontal flag
         int newX = (Horizontal ? static_cast<int>(scaledValue) : 0);
@@ -142,6 +183,80 @@ public:
     }
 
     //*******************************************************************************************
+    // This is the controller input routine for non-xinput devices. It builds an XINPUT_STATE 
+	// and calls on_xinput_get_state()
+    //*******************************************************************************************
+	void start_input_polling()
+	{
+		XINPUT_STATE state;
+		uint32_t retval = 0;
+		uint32_t user_index = CONTROLLER_SOURCE_THREAD;
+		
+        UEVR_InputSourceHandle LeftController = m_VR->get_left_joystick_source();
+        UEVR_InputSourceHandle RightController = m_VR->get_right_joystick_source();
+		
+		UEVR_ActionHandle VR_LB_RB = m_VR->get_action_handle("/actions/default/in/Grip");
+		UEVR_ActionHandle VR_RT_LT = m_VR->get_action_handle("/actions/default/in/Trigger");
+		UEVR_ActionHandle VR_STICK = m_VR->get_action_handle("/actions/default/in/Joystick");
+		UEVR_ActionHandle VR_STICK_CLICK = m_VR->get_action_handle("/actions/default/in/JoystickClick");
+		UEVR_ActionHandle VR_B = m_VR->get_action_handle("/actions/default/in/AButtonLeft");
+		UEVR_ActionHandle VR_Y = m_VR->get_action_handle("/actions/default/in/BButtonLeft");
+		UEVR_ActionHandle VR_A = m_VR->get_action_handle("/actions/default/in/AButtonRight");
+		UEVR_ActionHandle VR_X = m_VR->get_action_handle("/actions/default/in/BButtonRight");
+		UEVR_ActionHandle VR_START = m_VR->get_action_handle("/actions/default/in/SystemButton");
+		UEVR_ActionHandle ThumbrestLeft = m_VR->get_action_handle("/actions/default/in/ThumbrestTouchLeft");
+		UEVR_ActionHandle ThumbrestRight = m_VR->get_action_handle("/actions/default/in/ThumbrestTouchRight");
+		
+		UEVR_Vector2f LeftAxis;
+		UEVR_Vector2f RightAxis;
+		
+		API::get()->log_info("JoytoKey.dll: start_input_polling is beginning.");  
+
+		while(m_XinputPumpRunning == false)
+		{
+			// Clear the xinput state.
+			ZeroMemory(&state, sizeof(XINPUT_STATE));
+			ZeroMemory(&LeftAxis, sizeof(UEVR_Vector2f));
+			ZeroMemory(&RightAxis, sizeof(UEVR_Vector2f));
+			
+			// Populate the xinput state based on VR actions.
+			if(m_VR->is_action_active(VR_LB_RB, LeftController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+			if(m_VR->is_action_active(VR_LB_RB, RightController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+
+			if(m_VR->is_action_active(VR_RT_LT, LeftController)) state.Gamepad.bLeftTrigger = 255;
+			if(m_VR->is_action_active(VR_RT_LT, RightController)) state.Gamepad.bRightTrigger = 255;
+
+			if(m_VR->is_action_active(VR_STICK_CLICK, LeftController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
+			if(m_VR->is_action_active(VR_STICK_CLICK, RightController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;
+			
+			if(m_VR->is_action_active(VR_B, LeftController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_B;
+			if(m_VR->is_action_active(VR_Y, LeftController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_Y;
+			if(m_VR->is_action_active(VR_A, RightController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_A;
+			if(m_VR->is_action_active(VR_X, RightController)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_X;
+			
+			if(m_VR->is_action_active_any_joystick(VR_START)) state.Gamepad.wButtons |= XINPUT_GAMEPAD_START;
+
+			// Joystickaxis come back as an x,y float ranging from -1.0 to +1.0. The xinput axis ranges from -32767 to + 32767
+			m_VR->get_joystick_axis(LeftController, &LeftAxis);
+			m_VR->get_joystick_axis(RightController, &RightAxis);
+			
+			state.Gamepad.sThumbLX = (SHORT)(LeftAxis.x * 32767.0f);
+			state.Gamepad.sThumbLY = (SHORT)(LeftAxis.y * 32767.0f);
+			state.Gamepad.sThumbRX = (SHORT)(RightAxis.x * 32767.0f);
+			state.Gamepad.sThumbRY = (SHORT)(RightAxis.y * 32767.0f);
+			
+			// Call the xinput state function
+			on_xinput_get_state(&retval, user_index, &state);
+			
+			// Go through every VR action and if it's active, map to an equivalent xinput state object.
+			Sleep(XINPUT_POLL_TIME);
+		}
+		
+		API::get()->log_info("JoytoKey.dll: start_input_polling is exiting as unneeded.");  
+
+	}
+	
+    //*******************************************************************************************
     // This is the controller input routine. Everything happens here.
     //*******************************************************************************************
     void on_xinput_get_state(uint32_t* retval, uint32_t user_index, XINPUT_STATE* state) 
@@ -149,6 +264,15 @@ public:
         int i = 0;
         int Start = 0;
         int Limit = GAMEPAD_NUMBER_OF_BUTTONS;
+		
+		// We are using this flag to determine if the source of calling this function is
+		// the UEVR / game's xinput pump or if it's from our thread.
+		if(m_XinputPumpRunning == false && user_index != CONTROLLER_SOURCE_THREAD)
+		{
+			m_XinputPumpRunning = true;
+			API::get()->log_info("JoytoKey.dll: Detected natural xinput pump running. Disabling VR handle input.");  
+		}			
+		
         if(state != NULL)
         {
             // if using shift key
@@ -207,10 +331,10 @@ public:
             SetKeyForAxis(state->Gamepad.bRightTrigger, 200, Start + GAMEPAD_RT);
             SetKeyForAxis(state->Gamepad.bLeftTrigger, 200, Start + GAMEPAD_LT);
 
-            SetKeyForAxis(state->Gamepad.sThumbLX, 15000, Start + GAMEPAD_LSTICK_RIGHT);
-            SetKeyForAxis(state->Gamepad.sThumbLX, -15000, Start + GAMEPAD_LSTICK_LEFT);
-            SetKeyForAxis(state->Gamepad.sThumbLY, 15000, Start + GAMEPAD_LSTICK_UP);
-            SetKeyForAxis(state->Gamepad.sThumbLY, -15000, Start + GAMEPAD_LSTICK_DOWN);
+            SetKeyForAxis(state->Gamepad.sThumbLX, 20000, Start + GAMEPAD_LSTICK_RIGHT);
+            SetKeyForAxis(state->Gamepad.sThumbLX, -20000, Start + GAMEPAD_LSTICK_LEFT);
+            SetKeyForAxis(state->Gamepad.sThumbLY, 20000, Start + GAMEPAD_LSTICK_UP);
+            SetKeyForAxis(state->Gamepad.sThumbLY, -20000, Start + GAMEPAD_LSTICK_DOWN);
             
             // If right axis isn't overridden, use it as a mouse pointer.
             if(m_Keys[Start + GAMEPAD_RSTICK_RIGHT].Key == 0 && m_Keys[Start + GAMEPAD_RSTICK_LEFT].Key == 0)
@@ -219,8 +343,8 @@ public:
             }
             else
             {
-                SetKeyForAxis(state->Gamepad.sThumbRX, 15000, Start + GAMEPAD_RSTICK_RIGHT);
-                SetKeyForAxis(state->Gamepad.sThumbRX, -15000, Start + GAMEPAD_RSTICK_LEFT);
+                SetKeyForAxis(state->Gamepad.sThumbRX, 20000, Start + GAMEPAD_RSTICK_RIGHT);
+                SetKeyForAxis(state->Gamepad.sThumbRX, -20000, Start + GAMEPAD_RSTICK_LEFT);
             }
             if(m_Keys[Start + GAMEPAD_RSTICK_UP].Key == 0 && m_Keys[Start + GAMEPAD_RSTICK_DOWN].Key == 0)
             {
@@ -228,8 +352,8 @@ public:
             }
             else
             {
-                SetKeyForAxis(state->Gamepad.sThumbRY, 15000, Start + GAMEPAD_RSTICK_UP);
-                SetKeyForAxis(state->Gamepad.sThumbRY, -15000, Start + GAMEPAD_RSTICK_DOWN);
+                SetKeyForAxis(state->Gamepad.sThumbRY, 20000, Start + GAMEPAD_RSTICK_UP);
+                SetKeyForAxis(state->Gamepad.sThumbRY, -20000, Start + GAMEPAD_RSTICK_DOWN);
             }
         }
     }
@@ -383,13 +507,11 @@ public:
             API::get()->log_info("joytokey.dll:  GetKeyNumber returned, key=%d", KeyNumber);
             if(KeyNumber >= 0 && KeyNumber < TOTAL_BUTTONS)
             {
-                API::get()->log_info("joytokey.dll:  in if calling GetKeyFromLine");
                 m_Keys[KeyNumber].Key = GetKeyFromLine(Line);
-                API::get()->log_info("joytokey.dll:  in if returned GetKeyFromLine");
                 if(m_Keys[KeyNumber].Key > 0 && m_Keys[KeyNumber].Key < 0x08) m_Keys[KeyNumber].Mouse = true;
                 if(m_Keys[KeyNumber].Key == 0x0A || m_Keys[KeyNumber].Key == 0x0B) m_Keys[KeyNumber].Mouse = true;
                 
-                API::get()->log_info("joytokey.dll: Added entry: %ls, %d=0x%02F", Line.c_str(), KeyNumber, m_Keys[KeyNumber].Key);
+                API::get()->log_info("joytokey.dll: Added entry: %s, %d=0x%02F", Line.c_str(), KeyNumber, m_Keys[KeyNumber].Key);
             }
 		}		
 		
@@ -536,5 +658,17 @@ void DebugPrint(char* Format, ...)
   va_end(ArgPtr); 
 
   OutputDebugString(FormattedMessage);
+}
+
+DWORD WINAPI
+TimerCallbackThreadProc(
+  LPVOID    lpParameter   // thread data
+    )
+{
+    JoyToKey* Jtc = (JoyToKey*)lpParameter;
+    Sleep(5000);
+    
+	Jtc->start_input_polling();
+    return 0;
 }
 
