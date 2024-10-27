@@ -511,7 +511,7 @@ public:
                 if(m_Keys[KeyNumber].Key > 0 && m_Keys[KeyNumber].Key < 0x08) m_Keys[KeyNumber].Mouse = true;
                 if(m_Keys[KeyNumber].Key == 0x0A || m_Keys[KeyNumber].Key == 0x0B) m_Keys[KeyNumber].Mouse = true;
                 
-                API::get()->log_info("joytokey.dll: Added entry: %s, %d=0x%02F", Line.c_str(), KeyNumber, m_Keys[KeyNumber].Key);
+                API::get()->log_info("joytokey.dll: Added entry: %s, %d=0x%02X", Line.c_str(), KeyNumber, m_Keys[KeyNumber].Key);
             }
 		}		
 		
@@ -630,13 +630,13 @@ public:
         else if(Line.find("GAMEPAD_LB_X=") != std::string::npos) KeyNumber = 37;
         else if(Line.find("GAMEPAD_LB_Y=") != std::string::npos) KeyNumber = 38;
         else if(Line.find("GAMEPAD_LB_LSTICK_UP=") != std::string::npos) KeyNumber = 39;
-        else if(Line.find("GAMEPAD_LB_LSTICK_UP=") != std::string::npos) KeyNumber = 40;
-        else if(Line.find("GAMEPAD_LB_LSTICK_UP=") != std::string::npos) KeyNumber = 41;
-        else if(Line.find("GAMEPAD_LB_LSTICK_UP=") != std::string::npos) KeyNumber = 42;
+        else if(Line.find("GAMEPAD_LB_LSTICK_DOWN=") != std::string::npos) KeyNumber = 40;
+        else if(Line.find("GAMEPAD_LB_LSTICK_LEFT=") != std::string::npos) KeyNumber = 41;
+        else if(Line.find("GAMEPAD_LB_LSTICK_RIGHT=") != std::string::npos) KeyNumber = 42;
         else if(Line.find("GAMEPAD_LB_RSTICK_UP=") != std::string::npos) KeyNumber = 43;
-        else if(Line.find("GAMEPAD_LB_RSTICK_UP=") != std::string::npos) KeyNumber = 44;
-        else if(Line.find("GAMEPAD_LB_RSTICK_UP=") != std::string::npos) KeyNumber = 45;
-        else if(Line.find("GAMEPAD_LB_RSTICK_UP=") != std::string::npos) KeyNumber = 46;
+        else if(Line.find("GAMEPAD_LB_RSTICK_DOWN=") != std::string::npos) KeyNumber = 44;
+        else if(Line.find("GAMEPAD_LB_RSTICK_LEFT=") != std::string::npos) KeyNumber = 45;
+        else if(Line.find("GAMEPAD_LB_RSTICK_RIGHT=") != std::string::npos) KeyNumber = 46;
         else if(Line.find("GAMEPAD_LB_LT=") != std::string::npos) KeyNumber = 47;
         
         return KeyNumber;
