@@ -11,6 +11,7 @@
 #include <locale>
 #include <codecvt>
 #include <cctype>
+#include <filesystem>
 
 #include "uevr/Plugin.hpp"
 #include "main.h"
@@ -67,7 +68,8 @@ public:
     const UEVR_PluginInitializeParam* m_Param;
     const UEVR_VRData* m_VR;
 	bool m_XinputPumpRunning;
-
+	bool m_ExtraDebug = false;
+	
     JoyToKey() = default;
 	
     void on_dllmain(HANDLE handle) override {
@@ -134,7 +136,7 @@ public:
         SendInput(1, &input, sizeof(INPUT));
 		
 		// Clear stick value
-		Value = 0;
+		StickValue = 0;
     }
 
     void send_key(WORD key, bool key_up) {
@@ -181,6 +183,39 @@ public:
 
         SendInput(1, &input, sizeof(INPUT));
     }
+
+    //*******************************************************************************************
+	//
+	// Pass controller 1 and controller 2 instead of controller and hmd to see if controllers
+	// aer near each other.
+	// proximity is probably in 1.0 meter virtual ranges.
+	//
+    //*******************************************************************************************
+	bool is_controller_near_hmd(
+		UEVR_TrackedDeviceIndex controller_index,
+		float proximity_threshold, // Define a threshold distance
+		UEVR_TrackedDeviceIndex hmd_index) 
+	{
+		UEVR_Vector3f controller_pos, hmd_pos;
+		UEVR_Quaternionf unused_rotation; // Not needed for this calculation
+
+		ZeroMemory(&controller_pos, sizeof(controller_pos));
+		ZeroMemory(&hmd_pos, sizeof(hmd_pos));
+		ZeroMemory(&unused_rotation, sizeof(unused_rotation));
+		
+		// Use VR->get_pose() directly
+		m_VR->get_pose(controller_index, &controller_pos, &unused_rotation);
+		m_VR->get_pose(hmd_index, &hmd_pos, &unused_rotation);
+
+		// Compute the squared distance between the two points
+		float distance_squared = 
+			(controller_pos.x - hmd_pos.x) * (controller_pos.x - hmd_pos.x) +
+			(controller_pos.y - hmd_pos.y) * (controller_pos.y - hmd_pos.y) +
+			(controller_pos.z - hmd_pos.z) * (controller_pos.z - hmd_pos.z);
+
+		// Compare against squared threshold to avoid expensive sqrt calculation
+		return distance_squared <= proximity_threshold * proximity_threshold;
+	}
 
     //*******************************************************************************************
     // This is the controller input routine for non-xinput devices. It builds an XINPUT_STATE 
@@ -263,6 +298,7 @@ public:
     {
         int i = 0;
         int Start = 0;
+		int MotionLbFactor = 0;
         int Limit = GAMEPAD_NUMBER_OF_BUTTONS;
 		
 		// We are using this flag to determine if the source of calling this function is
@@ -275,6 +311,26 @@ public:
 		
         if(state != NULL)
         {
+			UEVR_TrackedDeviceIndex HmdIndex = m_VR->get_hmd_index();
+			UEVR_TrackedDeviceIndex LeftIndex = m_VR->get_left_controller_index();
+			UEVR_TrackedDeviceIndex RightIndex = m_VR->get_right_controller_index();
+			
+			bool LeftAndHmd = is_controller_near_hmd(LeftIndex, TOUCH_PROXIMITY, HmdIndex);
+			bool RightAndHmd = is_controller_near_hmd(RightIndex, TOUCH_PROXIMITY, HmdIndex);
+			bool LeftAndRight = is_controller_near_hmd(LeftIndex, TOUCH_PROXIMITY, RightIndex);
+			
+			if(m_ExtraDebug == true)
+			{
+				
+				API::get()->log_info("JoytoKey.dll: on_xinput_get_state: wButtons=0x%04x, Right Stick(%d,%d), Left Stick(%d,%d)\n", 
+									 state->Gamepad.wButtons, 
+									 state->Gamepad.sThumbRX,
+									 state->Gamepad.sThumbRY,
+									 state->Gamepad.sThumbLX,
+									 state->Gamepad.sThumbLY
+									 );  
+			}
+
             // if using shift key
             if(m_Keys[GAMEPAD_LB].Key == 0)
             {
@@ -282,7 +338,7 @@ public:
                 if(!(state->Gamepad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER))
                 {
                     // OK If LB is not down, go through every shift key and if one is down, release it
-                    for(i = GAMEPAD_NUMBER_OF_BUTTONS; i < TOTAL_BUTTONS; i++)
+                    for(i = GAMEPAD_NUMBER_OF_BUTTONS; i < TOTAL_GAMEPAD_BUTTONS; i++)
                     {
                         if(m_Keys[i].KeyDown == true)
                         {
@@ -290,6 +346,16 @@ public:
                             m_Keys[i].KeyDown = false;
                         }
                     }
+					
+					// clear motion shifted LB buttons
+					for(i = LEFT_CONTROL_LB_TO_HMD; i < TOTAL_BUTTONS; i++)
+					{
+                        if(m_Keys[i].KeyDown == true)
+                        {
+                            send_key_or_mouse(i, KEYUP);
+                            m_Keys[i].KeyDown = false;
+                        }
+					}
                 }
                 
                 // LB is down, so we need to clear every regular key.
@@ -304,10 +370,37 @@ public:
                             m_Keys[i].KeyDown = false;
                         }
                     }
+					
+					// Clear non-shifted motion buttons
+					for(i = LEFT_CONTROL_TO_HMD; i < (NUM_MOTIONS/2); i++)
+					{
+                        if(m_Keys[i].KeyDown == true)
+                        {
+                            send_key_or_mouse(i, KEYUP);
+                            m_Keys[i].KeyDown = false;
+                        }
+					}
+
                     Start = GAMEPAD_NUMBER_OF_BUTTONS;
-                    Limit = TOTAL_BUTTONS;
+					MotionLbFactor = NUM_MOTIONS/2;
+                    Limit = TOTAL_GAMEPAD_BUTTONS;
                 }
             }
+			
+            // Seems there's a state before the game gets going these all return 1.
+            if(LeftAndHmd == true && RightAndHmd == true && LeftAndRight == true)
+            {
+                LeftAndHmd = false;
+                RightAndHmd = false;
+                LeftAndRight = false;
+            }
+            
+            if(LeftAndHmd || RightAndHmd || LeftAndRight)
+                API::get()->log_info("joytokey: left+hmd=%d, right+hmd=%d, left+right=%d", LeftAndHmd, RightAndHmd, LeftAndRight);
+			// Go through the motion positions
+			SetKeyForControllerPosition(LEFT_CONTROL_TO_HMD + MotionLbFactor, LeftAndHmd);
+			SetKeyForControllerPosition(RIGHT_CONTROL_TO_HMD + MotionLbFactor, RightAndHmd);
+			SetKeyForControllerPosition(LEFT_RIGHT_CONTROL_TOUCH + MotionLbFactor, LeftAndRight);
             
             // go through each xinput button. If it's down check if we need to set it. If its not, check if we need to clear it
             SetKeyForGamepad(state, Start + GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_UP);
@@ -438,16 +531,52 @@ public:
 		}
     }
     
+
+	//***************************************************************************************************
+    // Sets the key up or down for the wbutton values
+	//***************************************************************************************************
+    void SetKeyForControllerPosition(int i, bool State)
+    {
+		if(m_Keys[i].Key)
+		{
+			if(State == true)
+			{
+                API::get()->log_info("joytokey: Setting Key:0x%x", m_Keys[i].Key);
+				if(m_Keys[i].KeyDown == false)
+				{
+					m_Keys[i].KeyDown = true;
+					send_key_or_mouse(i, KEYDOWN);
+				}
+			}
+			else
+			{
+				if(m_Keys[i].KeyDown == true)
+				{
+					m_Keys[i].KeyDown = false;
+					send_key_or_mouse(i, KEYUP);
+				}
+			}
+			
+		}
+    }
+
 	//***************************************************************************************************
 	// Stores the path and file location of the cvar.txt config file.
 	//***************************************************************************************************
 	void StoreConfigFileLocation(HANDLE handle) {
 		wchar_t wide_path[MAX_PATH]{};
 		if (GetModuleFileNameW((HMODULE)handle, wide_path, MAX_PATH)) {
-			const auto path = std::filesystem::path(wide_path).parent_path() / "joytokey.txt";
-			m_Path = path.string(); // change m_Path to a std::string
+			const auto config_path = std::filesystem::path(wide_path).parent_path();
+			
+			// Set the path for joytokey.txt
+			m_Path = (config_path / "joytokey.txt").string(); 
+
+			// Check if joytokey.debug exists in the same folder
+			if (std::filesystem::exists(config_path / "joytokey.debug")) {
+				m_ExtraDebug = true;
+			}
 		}
-	}	
+	}
 
 	//***************************************************************************************************
 	// Reads the config file cvars.txt and stores it in a linked list of CVAR_ITEMs.
@@ -638,7 +767,14 @@ public:
         else if(Line.find("GAMEPAD_LB_RSTICK_LEFT=") != std::string::npos) KeyNumber = 45;
         else if(Line.find("GAMEPAD_LB_RSTICK_RIGHT=") != std::string::npos) KeyNumber = 46;
         else if(Line.find("GAMEPAD_LB_LT=") != std::string::npos) KeyNumber = 47;
-        
+
+        else if(Line.find("LEFT_CONTROL_TO_HMD=") != std::string::npos) KeyNumber = TOTAL_GAMEPAD_BUTTONS;
+        else if(Line.find("RIGHT_CONTROL_TO_HMD=") != std::string::npos) KeyNumber = TOTAL_GAMEPAD_BUTTONS + 1;
+        else if(Line.find("LEFT_RIGHT_CONTROL_TOUCH=") != std::string::npos) KeyNumber = TOTAL_GAMEPAD_BUTTONS + 2;
+        else if(Line.find("LEFT_CONTROL_LB_TO_HMD=") != std::string::npos) KeyNumber = TOTAL_GAMEPAD_BUTTONS + 3;
+        else if(Line.find("RIGHT_CONTROL_LB_TO_HMD=") != std::string::npos) KeyNumber = TOTAL_GAMEPAD_BUTTONS + 4;
+        else if(Line.find("LEFT_RIGHT_CONTROL_LB_TOUCH=") != std::string::npos) KeyNumber = TOTAL_GAMEPAD_BUTTONS + 5;
+
         return KeyNumber;
     }
     
