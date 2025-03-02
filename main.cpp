@@ -432,7 +432,8 @@ public:
             // If right axis isn't overridden, use it as a mouse pointer.
             if(m_Keys[Start + GAMEPAD_RSTICK_RIGHT].Key == 0 && m_Keys[Start + GAMEPAD_RSTICK_LEFT].Key == 0)
             {
-                MoveMousePointer(state->Gamepad.sThumbRX, true);
+                if(m_Keys[Start + GAMEPAD_RSTICK_RIGHT].Key != 0xFF && m_Keys[Start + GAMEPAD_RSTICK_LEFT].Key != 0xFF)
+                    MoveMousePointer(state->Gamepad.sThumbRX, true);
             }
             else
             {
@@ -441,7 +442,8 @@ public:
             }
             if(m_Keys[Start + GAMEPAD_RSTICK_UP].Key == 0 && m_Keys[Start + GAMEPAD_RSTICK_DOWN].Key == 0)
             {
-                MoveMousePointer(state->Gamepad.sThumbRY, false);
+                if(m_Keys[Start + GAMEPAD_RSTICK_UP].Key != 0xFF && m_Keys[Start + GAMEPAD_RSTICK_DOWN].Key != 0xFF)
+                    MoveMousePointer(state->Gamepad.sThumbRY, false);
             }
             else
             {
